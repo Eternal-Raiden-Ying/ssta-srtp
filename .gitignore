@@ -1,0 +1,10 @@
+__pycache__/
+
+build/
+install/
+
+checkpoints/
+data/
+
+.DS_Store
+._*
