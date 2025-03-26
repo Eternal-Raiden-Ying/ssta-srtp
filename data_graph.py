@@ -5,12 +5,46 @@ import time
 
 random.seed(8026728)
 
-available_data = ('blabla usb_cdc_core BM64 jpeg_encoder salsa20 '
-                  'usbf_device aes128 wbqspiflash aes192 cic_decimator '
-                  'xtea aes256 des spm y_huff aes_cipher picorv32a synth_ram '
-                  'zipdiv genericfir usb').split()
+# available_data = ('blabla usb_cdc_core BM64 jpeg_encoder salsa20 '
+#                   'usbf_device aes128 wbqspiflash aes192 cic_decimator '
+#                   'xtea aes256 des spm y_huff aes_cipher picorv32a synth_ram '
+#                   'zipdiv genericfir usb').split()
 
-train_data_keys = random.sample(available_data, 14)
+available_data = ('blabla usb_cdc_core BM64 salsa20 '
+                  'usbf_device wbqspiflash cic_decimator '
+                  'xtea des spm y_huff aes_cipher picorv32a synth_ram '
+                  'zipdiv genericfir usb').split()  # small version
+
+"""
+    num nodes: number of total nodes
+    num edges: number of total cell_out edge and net_out edge  (physical edges)
+
+    blabla:         num_nodes:55568     num_edges:75542
+    usb_cdc_core:   num_nodes:7406      num_edges:10069
+    BM64:           num_nodes:38458     num_edges:53177
+    jpeg_encoder:   num_nodes:238216    num_edges:344697
+    salsa20:        num_nodes:78486     num_edges:110632
+    usbf_device:    num_nodes:66345     num_edges:88467
+    aes128:         num_nodes:211045    num_edges:287454
+    wbqspiflash:    num_nodes:9672      num_edges:13252
+    aes192:         num_nodes:234211    num_edges:318260
+    cic_decimator:  num_nodes:3131      num_edges:4334
+    xtea:           num_nodes:10213     num_edges:14033
+    aes256:         num_nodes:290955    num_edges:396676
+    des:            num_nodes:60541     num_edges:86323
+    spm:            num_nodes:1121      num_edges:1465
+    y_huff:         num_nodes:48216     num_edges:64301
+    aes_cipher:     num_nodes:59777     num_edges:84082
+    picorv32a:      num_nodes:58676     num_edges:83255
+    synth_ram:      num_nodes:25910     num_edges:35806
+    zipdiv:         num_nodes:4398      num_edges:6015
+    genericfir:     num_nodes:38827     num_edges:53858
+    usb:            num_nodes:3361      num_edges:4595
+"""
+
+labels = available_data
+dgl_graphs_path = ['data/8_rat/{}.graph.bin'.format(k) for k in labels]
+
 
 def gen_topo(g_hetero):
     torch.cuda.synchronize()
@@ -26,6 +60,7 @@ def gen_topo(g_hetero):
     torch.cuda.synchronize()
     time_e = time.time()
     return ret, time_e - time_s
+
 
 def gen_homobigraph_with_features(g_hetero):
     # for DeepGCNII baseline
@@ -43,11 +78,17 @@ def gen_homobigraph_with_features(g_hetero):
     g.edata['ef'] = torch.cat([ne, ce, -ne, -ce])
     return g
 
-data = {}
-for k in available_data:
-    g = dgl.load_graphs('data/8_rat/{}.graph.bin'.format(k))[0][0].to('cuda')
+
+def get_data(key:str, device:str):
+    if 'cuda' in device and not torch.cuda.is_available():
+        print(f"{device} is not available, using cpu to load data from {key}")
+        device = "cpu"
+    device = torch.device(device if torch.cuda.is_available() else "cpu")
+
+
+def graph_preprocess(g):
     g.ndata['n_net_delays_log'] = torch.log(0.0001 + g.ndata['n_net_delays']) + 7.6
-    invalid_nodes = torch.abs(g.ndata['n_ats']) > 1e20   # ignore all uninitialized stray pins
+    invalid_nodes = torch.abs(g.ndata['n_ats']) > 1e20  # ignore all uninitialized stray pins
     g.ndata['n_ats'][invalid_nodes] = 0
     g.ndata['n_slews'][invalid_nodes] = 0
     g.ndata['n_atslew'] = torch.cat([
@@ -61,22 +102,58 @@ for k in available_data:
     # g.ndata['nf']: node features (is_I/O_pin, is_fanout, distance*4, capacitance*4)
     ts = {'input_nodes': (g.ndata['nf'][:, 1] < 0.5).nonzero().flatten().type(torch.int32),  # fp64 -> fp32
           'output_nodes': (g.ndata['nf'][:, 1] > 0.5).nonzero().flatten().type(torch.int32),  # nonzero 找到非零元素的索引
-          'output_nodes_nonpi': torch.logical_and(g.ndata['nf'][:, 1] > 0.5, g.ndata['nf'][:, 0] < 0.5).nonzero().flatten().type(torch.int32),
-          'pi_nodes': torch.logical_and(g.ndata['nf'][:, 1] > 0.5, g.ndata['nf'][:, 0] > 0.5).nonzero().flatten().type(torch.int32),
-          'po_nodes': torch.logical_and(g.ndata['nf'][:, 1] < 0.5, g.ndata['nf'][:, 0] > 0.5).nonzero().flatten().type(torch.int32),
+          'output_nodes_nonpi': torch.logical_and(g.ndata['nf'][:, 1] > 0.5,
+                                                  g.ndata['nf'][:, 0] < 0.5).nonzero().flatten().type(torch.int32),
+          'pi_nodes': torch.logical_and(g.ndata['nf'][:, 1] > 0.5, g.ndata['nf'][:, 0] > 0.5).nonzero().flatten().type(
+              torch.int32),
+          'po_nodes': torch.logical_and(g.ndata['nf'][:, 1] < 0.5, g.ndata['nf'][:, 0] > 0.5).nonzero().flatten().type(
+              torch.int32),
           'endpoints': (g.ndata['n_is_timing_endpt'] > 0.5).nonzero().flatten().type(torch.long),
           'topo': topo,
           'topo_time': topo_time}
-    data[k] = g, ts
+    return g, ts
 
-data_train = {k: t for k, t in data.items() if k in train_data_keys}
-data_test = {k: t for k, t in data.items() if k not in train_data_keys}
 
-if __name__ == '__main__':
-    # print('Graph statistics: (total {} graphs)'.format(len(data)))
-    # print('{:15} {:>10} {:>10}'.format('NAME', '#NODES', '#EDGES'))
-    # for k, (g, ts) in data.items():
-    #     print('{:15} {:>10} {:>10}'.format(k, g.num_nodes(), g.num_edges()))
-    for dic in [data_train, data_test]:
-        for k, (g, ts) in dic.items():
-            print('\\texttt{{{}}},{},{},{},{},{},{}'.format(k.replace('_', '\_'), g.num_nodes(), g.num_edges('net_out'), g.num_edges('cell_out'), len(ts['topo']), len(ts['po_nodes']), len(ts['endpoints'])))
+# train_data_keys = random.sample(available_data, 14)
+# data = dict()
+#
+# for k in available_data:
+#     g = dgl.load_graphs('data/8_rat/{}.graph.bin'.format(k))[0][0].to('cuda')
+#     g.ndata['n_net_delays_log'] = torch.log(0.0001 + g.ndata['n_net_delays']) + 7.6
+#     invalid_nodes = torch.abs(g.ndata['n_ats']) > 1e20   # ignore all uninitialized stray pins
+#     g.ndata['n_ats'][invalid_nodes] = 0
+#     g.ndata['n_slews'][invalid_nodes] = 0
+#     g.ndata['n_atslew'] = torch.cat([
+#         g.ndata['n_ats'],
+#         torch.log(0.0001 + g.ndata['n_slews']) + 3
+#     ], dim=1)  # g.ndata['n_ats'].shape -> Nodes, Features(EL/RF)
+#     g.edges['cell_out'].data['ef'] = g.edges['cell_out'].data['ef'].type(torch.float32)
+#     g.edges['cell_out'].data['e_cell_delays'] = g.edges['cell_out'].data['e_cell_delays'].type(torch.float32)
+#     topo, topo_time = gen_topo(g)
+#
+#     # g.ndata['nf']: node features (is_I/O_pin, is_fanout, distance*4, capacitance*4)
+#     ts = {'input_nodes': (g.ndata['nf'][:, 1] < 0.5).nonzero().flatten().type(torch.int32),  # fp64 -> fp32
+#           'output_nodes': (g.ndata['nf'][:, 1] > 0.5).nonzero().flatten().type(torch.int32),  # nonzero 找到非零元素的索引
+#           'output_nodes_nonpi': torch.logical_and(g.ndata['nf'][:, 1] > 0.5, g.ndata['nf'][:, 0] < 0.5).nonzero().flatten().type(torch.int32),
+#           'pi_nodes': torch.logical_and(g.ndata['nf'][:, 1] > 0.5, g.ndata['nf'][:, 0] > 0.5).nonzero().flatten().type(torch.int32),
+#           'po_nodes': torch.logical_and(g.ndata['nf'][:, 1] < 0.5, g.ndata['nf'][:, 0] > 0.5).nonzero().flatten().type(torch.int32),
+#           'endpoints': (g.ndata['n_is_timing_endpt'] > 0.5).nonzero().flatten().type(torch.long),
+#           'topo': topo,
+#           'topo_time': topo_time}
+#     data[k] = g, ts
+#
+# data_train = {k: t for k, t in data.items() if k in train_data_keys}
+# data_test = {k: t for k, t in data.items() if k not in train_data_keys}
+# print()
+
+
+
+
+# if __name__ == '__main__':
+#     # print('Graph statistics: (total {} graphs)'.format(len(data)))
+#     # print('{:15} {:>10} {:>10}'.format('NAME', '#NODES', '#EDGES'))
+#     # for k, (g, ts) in data.items():
+#     #     print('{:15} {:>10} {:>10}'.format(k, g.num_nodes(), g.num_edges()))
+#     for dic in [data_train, data_test]:
+#         for k, (g, ts) in dic.items():
+#             print('\\texttt{{{}}},{},{},{},{},{},{}'.format(k.replace('_', '\_'), g.num_nodes(), g.num_edges('net_out'), g.num_edges('cell_out'), len(ts['topo']), len(ts['po_nodes']), len(ts['endpoints'])))
