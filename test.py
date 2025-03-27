@@ -21,3 +21,15 @@ g.ndata['nf'] = torch.tensor([pin_positions[nodes[i.item()].replace('\\','')][0:
 g.edges['net_out'].data['net_delays_log'] = (torch.log(0.0001 + g.edges['net_out'].data['net_delay']) + 9.211) # log(0.0001) ≈ -9.211
 
 graph_preprocess(g)
+
+for (g, ts), label in dataloader:
+    pred_net_delays, pred_cell_delays, pred_atslew = model(g, ts, groundtruth=args.groundtruth)
+    loss_net_delays, loss_cell_delays = 0, 0
+
+    loss_net_delays = F.mse_loss(pred_net_delays, g.ndata['n_net_delays_log'])
+
+    loss_cell_delays = F.mse_loss(pred_cell_delays, g.edges['cell_out'].data['e_cell_delays'])
+
+    loss_ats = F.mse_loss(pred_atslew, g.ndata['n_atslew'])
+
+    (loss_net_delays + loss_cell_delays + loss_ats).backward()

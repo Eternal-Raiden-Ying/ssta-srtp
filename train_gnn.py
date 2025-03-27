@@ -125,7 +125,7 @@ def train(model, dataloader, optimizer, epoch, args):
             # It seems that if some forward propagation channel is not used in backward graph, the GPU memory would BOOM.
             # so we just create a fake gradient channel for this cell delay fork and make sure it does not contribute to gradient by *0.
             loss_cell_delays = torch.sum(pred_cell_delays) * 0.0
-
+        # TODO: compound loss with both groundTruth and propagate, with adaptive coefficient
         loss_ats = F.mse_loss(pred_atslew, g.ndata['n_atslew'])
         train_loss_tot_ats += loss_ats.item()
 
@@ -201,6 +201,46 @@ def validate(model, dataloader, optimizer, epoch, args):
     #         print('Error testing, but ignored')
 
 
+def test(model, dataloader, optimizer, args):
+    with torch.no_grad():
+        model.eval()
+
+        sample_r2 = list()
+
+        for (g, ts), label in dataloader:
+            pred_net_delays, pred_cell_delays, pred_atslew = model(g, ts, groundtruth=True)
+            pred_net_delays_prop, pred_cell_delays_prop, pred_atslew_prop = model(g, ts, groundtruth=False)
+            r2 = [0,0,0,0,0,0]
+            true_at = g.ndata['n_atslew'][:, :4]  # all nodes, only AT
+            true_net_delay = g.ndata['n_net_delays_log']
+            true_cell_delay = g.edges['cell_out'].data['e_cell_delays']
+            pred_at_prop = pred_atslew_prop[:, :4]
+            pred_at = pred_atslew[:, :4]
+            r2[0] = r2_score(true_at.cpu().numpy().reshape(-1), pred_at.cpu().numpy().reshape(-1))
+            r2[1] = r2_score(true_at.cpu().numpy().reshape(-1), pred_at_prop.cpu().numpy().reshape(-1))
+            sample_r2.append((r2,g.num_nodes()))
+
+            r2[2] = r2_score(true_net_delay.cpu().numpy().reshape(-1), pred_net_delays.cpu().numpy().reshape(-1))
+            r2[3] = r2_score(true_net_delay.cpu().numpy().reshape(-1), pred_net_delays_prop.cpu().numpy().reshape(-1))
+            r2[4] = r2_score(true_cell_delay.cpu().numpy().reshape(-1), pred_cell_delays.cpu().numpy().reshape(-1))
+            r2[5] = r2_score(true_cell_delay.cpu().numpy().reshape(-1), pred_cell_delays_prop.cpu().numpy().reshape(-1))
+            print(f"{label}:  nodes:{g.num_nodes()}\n"
+                  f"\tAT R2:{r2[0]:.8f}                AT_prop R2:{r2[1]:.8f}\n"
+                  f"\tnet_delay R2:{r2[2]:.8f}         net_delay_prop R2:{r2[3]:.8f}\n"
+                  f"\tcell_delay R2:{r2[4]:.8f}        cell_delay_prop R2:{r2[5]:.8f}\n"
+                  f"\n"
+                  )
+
+        mean_r2 = 0
+        nodes_tot = 0
+        for element in sample_r2:
+            r2 = element[0][1]
+            num_nodes = element[1]
+            mean_r2 += r2 * num_nodes
+            nodes_tot += num_nodes
+        mean_r2 = mean_r2 / float(nodes_tot)
+        return mean_r2
+
 if __name__ == '__main__':
     args = parser.parse_args()
     if not os.path.exists(args.output_dir):
@@ -220,10 +260,20 @@ if __name__ == '__main__':
 
     if args.test:
         checkpoint = torch.load('./checkpoints/08_atcd_specul/15799.pth')
-        breakpoint()
         model.load_state_dict(checkpoint, strict=True)
-        # test(model)
-        # test_netdelay(model)
+        train_graph_num = 12
+        validate_graph_num = 5
+
+        dataloader_train, dataloader_validate = get_dataloder(dgl_graphs_path, labels,
+                                                              train_graph_num, validate_graph_num, args)
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+        # r2 = test(model, dataloader_train, optimizer, args)
+        # r2 = test(model, dataloader_validate, optimizer, args)
+        for epoch in range(1):
+            train(model, dataloader_train, optimizer, epoch, args)
+        r2 = test(model, dataloader_validate, optimizer, args)
+        print(f"meen R2:{r2}")
+
     else:
         print(f"training model TimingGCN on device {args.device}")
         print('saving logs and models to ./checkpoints/{}'.format(args.checkpoint))

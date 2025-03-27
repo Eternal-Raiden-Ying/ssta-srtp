@@ -4,6 +4,20 @@ import dgl
 import dgl.function as fn
 import functools
 import pdb
+from torch.autograd import Function
+
+class SeparateLossCustom(Function):
+    @staticmethod
+    def forward(ctx, input, target):
+        ctx.save_for_backward(input, target)
+        return F.mse_loss(input, target, reduction='none')  # 返回逐元素的 MSE Loss
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        input, target = ctx.saved_tensors
+        grad_input = grad_output * 2 * (input - target)  # 自定义的梯度计算
+        grad_target = -grad_input  # 对目标的梯度是负的
+        return grad_input, grad_target
 
 
 class MLP(torch.nn.Module):
@@ -161,15 +175,15 @@ class SignalProp(torch.nn.Module):
         # last_nf contains input transition and fanout node features contains output capacitance
         # thus could make lut axis query
         q = torch.cat([last_nf, edges.src['nf'], edges.dst['nf']], dim=1)
-        q = self.MLP_lut_query(q)
-        q = q.reshape(-1, 2)  # ?
+        q = self.MLP_lut_query(q)  # get query vector (slew, cap) * num_lut * lut_dup
+        q = q.reshape(-1, 2)  # shape: (nodes)*num_lut*lut_dup, 2(slew, cap)
         
         # answer lut axis query
         axis_len = self.in_cell_num_luts * (1 + 2 * self.in_cell_lut_sz)
         axis = edges.data['ef'][:, :axis_len]
-        axis = axis.reshape(-1, 1 + 2 * self.in_cell_lut_sz)
-        axis = axis.repeat(1, self.lut_dup).reshape(-1, 1 + 2 * self.in_cell_lut_sz)
-        a = self.MLP_lut_attention(torch.cat([q, axis], dim=1))
+        axis = axis.reshape(-1, 1 + 2 * self.in_cell_lut_sz)  # shape: num_lut, query len
+        axis = axis.repeat(1, self.lut_dup).reshape(-1, 1 + 2 * self.in_cell_lut_sz)  # shape: num_lut*lut*dup,query len
+        a = self.MLP_lut_attention(torch.cat([q, axis], dim=1))  # shape: 2 * lut_sz  (x attn, y attn)
         
         # transform answer to answer mask matrix
         a = a.reshape(-1, 2, self.in_cell_lut_sz)
@@ -178,8 +192,11 @@ class SignalProp(torch.nn.Module):
 
         # look up answer matrix in lut
         tables_len = self.in_cell_num_luts * self.in_cell_lut_sz ** 2
-        tables = edges.data['ef'][:, axis_len:axis_len + tables_len]
-        r = torch.matmul(tables.reshape(-1, 1, 1, self.in_cell_lut_sz ** 2), a.reshape(-1, 4, self.in_cell_lut_sz ** 2, 1))   # batch dot product
+        tables = edges.data['ef'][:, axis_len:axis_len + tables_len]  # shape: nodes*table*num_lut
+        # TODO: dot product could be replaced by attention mechanism
+        r = torch.matmul(tables.reshape(-1, 1, 1, self.in_cell_lut_sz ** 2),  # shape:nodes * num_lut,1,1,table
+                         a.reshape(-1, 4, self.in_cell_lut_sz ** 2, 1)  # shape: nodes*num_lut,lut_dup,table,1
+                         )   # batch dot product
 
         # construct final msg
         r = r.reshape(len(edges), self.in_cell_num_luts * self.lut_dup)
@@ -274,6 +291,26 @@ class TimingGCN(torch.nn.Module):
         self.nc3 = NetConv(32, 2, 16)  # 16 = 4x delay + 12x arbitrary (might include cap, beta)
         self.prop = SignalProp(10 + 16, 8, 7, 8, 4)
 
+
+    # def forward(self, g, ts, groundtruth=False):
+    #     nf0 = g.ndata['nf']  # node features  shape: nodes, 10
+    #     x = self.nc1(g, ts, nf0)
+    #     x = self.nc2(g, ts, x)
+    #     x = self.nc3(g, ts, x)  # x.shape: nodes, nc3.out_nf(16)
+    #     if groundtruth:
+    #         # for training
+    #         net_delays = x[:, :4]  # expect the front four element contains info relative to net_delays
+    #         other_dim = x[:, 4:]
+    #         nf1 = torch.cat([nf0, g.ndata['n_net_delays_log'], other_dim], dim=1)
+    #         nf2, cell_delays = self.prop(g, ts, nf1, groundtruth=groundtruth)
+    #     else:
+    #         net_delays = x[:, :4]
+    #         other_dim = x[:, 4:]
+    #         nf1 = torch.cat([nf0, net_delays.detach(), other_dim], dim=1)
+    #         nf2, cell_delays = self.prop(g, ts, nf1, groundtruth=groundtruth)
+    #     return net_delays, cell_delays, nf2
+
+    # RAW version
     def forward(self, g, ts, groundtruth=False):
         # why here g has delay info of nodes already
         nf0 = g.ndata['nf']  # node features  shape: nodes, 10
@@ -284,6 +321,7 @@ class TimingGCN(torch.nn.Module):
         nf1 = torch.cat([nf0, x], dim=1)
         nf2, cell_delays = self.prop(g, ts, nf1, groundtruth=groundtruth)
         return net_delays, cell_delays, nf2
+
 
 # {AllConv, DeepGCNII}: Simple and Deep Graph Convolutional Networks, arxiv 2007.02133 (GCNII)
 
