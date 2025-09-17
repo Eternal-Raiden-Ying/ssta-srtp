@@ -8,3 +8,8 @@ data/
 
 .DS_Store
 ._*
+/linux/
+/numerical_analysis/
+/pic/
+/res/
+.idea/

@@ -6,14 +6,19 @@ import time
 random.seed(8026728)
 
 # available_data = ('blabla usb_cdc_core BM64 jpeg_encoder salsa20 '
-#                   'usbf_device aes128 wbqspiflash aes192 cic_decimator '
-#                   'xtea aes256 des spm y_huff aes_cipher picorv32a synth_ram '
-#                   'zipdiv genericfir usb').split()
+#                            'usbf_device aes128 wbqspiflash aes192 cic_decimator '
+#                            'xtea aes256 des spm y_huff aes_cipher picorv32a synth_ram '
+#                            'zipdiv genericfir usb').split()
 
 available_data = ('blabla usb_cdc_core BM64 salsa20 '
                   'usbf_device wbqspiflash cic_decimator '
                   'xtea des spm y_huff aes_cipher picorv32a synth_ram '
                   'zipdiv genericfir usb').split()  # small version
+
+# available_data = ('usb_cdc_core BM64 salsa20 '
+#                   'usbf_device wbqspiflash cic_decimator '
+#                   'xtea des spm y_huff aes_cipher picorv32a synth_ram '
+#                   'zipdiv genericfir usb').split()  # blabla always cause nan
 
 """
     num nodes: number of total nodes
@@ -86,17 +91,48 @@ def get_data(key:str, device:str):
     device = torch.device(device if torch.cuda.is_available() else "cpu")
 
 
-def graph_preprocess(g):
+
+def graph_preprocess(g, normalize=False):
+    # # v11 ours
     g.ndata['n_net_delays_log'] = torch.log(0.0001 + g.ndata['n_net_delays']) + 7.6
     invalid_nodes = torch.abs(g.ndata['n_ats']) > 1e20  # ignore all uninitialized stray pins
     g.ndata['n_ats'][invalid_nodes] = 0
     g.ndata['n_slews'][invalid_nodes] = 0
     g.ndata['n_atslew'] = torch.cat([
         g.ndata['n_ats'],
-        torch.log(0.0001 + g.ndata['n_slews']) + 3
+        torch.log(0.00001 + g.ndata['n_slews']) + 11.6
     ], dim=1)  # g.ndata['n_ats'].shape -> Nodes, Features(EL/RF)
     g.edges['cell_out'].data['ef'] = g.edges['cell_out'].data['ef'].type(torch.float32)
     g.edges['cell_out'].data['e_cell_delays'] = g.edges['cell_out'].data['e_cell_delays'].type(torch.float32)
+
+    # new
+    if normalize:
+        nodetype, nodepos, nodecap = torch.split(g.ndata['nf'],[2,4,4],dim=1)
+        g.ndata['nf'] = torch.cat([nodetype, nodepos/400,torch.log(nodecap*10000+1)],dim=1)
+        query, tables = torch.split(g.edges['cell_out'].data['ef'],[120,392],dim=1)
+        is_table_valid, x_axis, y_axis = torch.split(query.reshape(-1,8,15), [1,7,7],dim=2)
+        query = torch.cat([is_table_valid, torch.log(0.00001+x_axis)+11.6, torch.log(y_axis*10000+1)], dim=2).reshape(-1,120)
+        g.edges['cell_out'].data['ef'] = torch.cat([query,tables], dim=1)
+
+        g.edges['net_out'].data['ef'] = g.edges['net_out'].data['ef']/400
+        g.edges['net_in'].data['ef'] = g.edges['net_in'].data['ef']/400
+
+    ########################################################
+    # # raw, baseline
+    else:
+        g.ndata['n_net_delays_log'] = torch.log(0.0001 + g.ndata['n_net_delays']) + 7.6
+        invalid_nodes = torch.abs(g.ndata['n_ats']) > 1e20  # ignore all uninitialized stray pins
+        g.ndata['n_ats'][invalid_nodes] = 0
+        g.ndata['n_slews'][invalid_nodes] = 0
+        g.ndata['n_atslew'] = torch.cat([
+            g.ndata['n_ats'],
+            torch.log(0.0001 + g.ndata['n_slews']) + 3
+        ], dim=1)  # g.ndata['n_ats'].shape -> Nodes, Features(EL/RF)
+        g.edges['cell_out'].data['ef'] = g.edges['cell_out'].data['ef'].type(torch.float32)
+        g.edges['cell_out'].data['e_cell_delays'] = g.edges['cell_out'].data['e_cell_delays'].type(torch.float32)
+
+    ########################################################
+    #common
     topo, topo_time = gen_topo(g)
 
     # g.ndata['nf']: node features (is_I/O_pin, is_fanout, distance*4, capacitance*4)

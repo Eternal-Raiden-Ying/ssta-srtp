@@ -41,11 +41,10 @@ parser.add_argument(
 # so better to use num worker == 0, means using simple thread
 
 parser.add_argument('--batch-size', type=int, default=1, help='batch size')
-parser.add_argument('--norm', type=bool, default=False, help='use normalize (default False)')
 parser.add_argument('--num-workers',type=int, default=0, help='number of workers')
 parser.add_argument('--pin-mem', type=bool, default=False, help='pin memory')
 parser.add_argument('--device', type=str, default='cuda:0', help='device')
-parser.add_argument('--epochs', type=int, default=1000,help='epoch')
+parser.add_argument('--epochs', type=int, default=10000,help='epoch')
 parser.add_argument('--start-epoch',type=int,default=0,help='start epoch')
 parser.add_argument('--output-dir', type=str, default='res',help='output directory')
 parser.add_argument('--enable-process-data', dest='process_data', action='store_true',
@@ -358,12 +357,12 @@ def validate(model, dataloader, optimizer, epoch, args):
 def test(model, dataloader, optimizer, args):
     with torch.no_grad():
         model.eval()
-        args.norm = False
+
         sample_r2 = list()
 
         for (g, ts), label in dataloader:
-            pred_net_delays, pred_cell_delays, pred_atslew, _, _ = model(g, ts, groundtruth=True)
-            pred_net_delays_prop, pred_cell_delays_prop, pred_atslew_prop, _, _ = model(g, ts, groundtruth=False)
+            pred_net_delays, pred_cell_delays, pred_atslew = model(g, ts, groundtruth=True)
+            pred_net_delays_prop, pred_cell_delays_prop, pred_atslew_prop = model(g, ts, groundtruth=False)
             r2 = [0,0,0,0,0,0]
             true_at = g.ndata['n_atslew'][:, :4]  # all nodes, only AT
             true_net_delay = g.ndata['n_net_delays_log']
@@ -421,10 +420,10 @@ if __name__ == '__main__':
         dataloader_train, dataloader_validate = get_dataloder(dgl_graphs_path, labels,
                                                               train_graph_num, validate_graph_num, args)
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-        r2_train = test(model, dataloader_train, optimizer, args)
-        r2_val = test(model, dataloader_validate, optimizer, args)
-        print(f"meen R2_prop:{np.average(np.array([r2_train,r2_val]),
-                                         weights=np.array([train_graph_num, validate_graph_num]))}")
+        r2 = test(model, dataloader_train, optimizer, args)
+        print(f"meen R2_prop:{r2}")
+        r2 = test(model, dataloader_validate, optimizer, args)
+        print(f"meen R2_prop:{r2}")
         # breakpoint()
         # for epoch in range(1):
         #     train(model, dataloader_train, optimizer, epoch, args)

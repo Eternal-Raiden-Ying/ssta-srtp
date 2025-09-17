@@ -9,7 +9,7 @@ from data_graph import *
 
 
 class DGLGraphDataset(Dataset):
-    def __init__(self, graphs_path, labels: list, opt='default'):
+    def __init__(self, graphs_path, labels: list, opt='default', norm=False):
         """
         opt: default
             @param graphs_path: List[DGLGraph_path] - 一个包含多个 DGLGraph_path 的列表
@@ -23,6 +23,7 @@ class DGLGraphDataset(Dataset):
         """
         self.graphs_path = graphs_path
         self.labels = labels
+        self.norm = norm
         assert opt in ['default', 'CircuitNet'], f"invalid opt {opt}, expected 'default' or 'CircuitNet'"
         self.opt = opt
 
@@ -32,9 +33,10 @@ class DGLGraphDataset(Dataset):
     def __getitem__(self, index):
         if self.opt == "default":
             g = dgl.load_graphs(self.graphs_path[index])[0][0].to("cuda",non_blocking=True)
-            g_new, ts = graph_preprocess(g)
+            g_new, ts = graph_preprocess(g, normalize=self.norm)
             return (g_new, ts), self.labels[index]
         elif self.opt == "CircuitNet":
+            # remain to be finished
             timing_path = self.graphs_path
             label = self.labels[index]
             net_edges = np.load(os.path.join(timing_path,"net_edges",f"{label}.npz"))['net_edges']
@@ -72,6 +74,7 @@ def collate_fn(batch):
 
 
 def get_dataloder(graph_paths, labels, train_num, validate_num, args):
+    assert len(graph_paths) == len(labels), ['graph paths not match labels']
     assert train_num + validate_num <= len(labels), ['sum of graph for training and validate beyond total graphs']
     index_list = [i for i in range(train_num+validate_num)]
     random.shuffle(index_list)
@@ -81,7 +84,7 @@ def get_dataloder(graph_paths, labels, train_num, validate_num, args):
     validate_labels = [labels[i] for i in index_list[-validate_num:]]
 
     data_loader_train = torch.utils.data.DataLoader(
-        dataset=DGLGraphDataset(graphs_path=train_paths, labels=train_labels, opt=args.opt),
+        dataset=DGLGraphDataset(graphs_path=train_paths, labels=train_labels, opt=args.opt, norm=args.norm),
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         pin_memory=args.pin_mem,
@@ -90,7 +93,7 @@ def get_dataloder(graph_paths, labels, train_num, validate_num, args):
     )
 
     data_loader_validate = torch.utils.data.DataLoader(
-        dataset=DGLGraphDataset(graphs_path=validate_paths, labels=validate_labels, opt=args.opt),
+        dataset=DGLGraphDataset(graphs_path=validate_paths, labels=validate_labels, opt=args.opt, norm=args.norm),
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         pin_memory=args.pin_mem,
@@ -106,6 +109,7 @@ def get_dataloader_from_circuitNet(timing_path, labels, train_num, validate_num,
             |---- net_edges
             |---- pin_positions
     """
+    # remain to be finished
     assert train_num + validate_num <= len(labels), ['sum of graph for training and validate beyond total graphs']
     assert os.path.exists(timing_path), "timing path not exist"
     index_list = [i for i in range(train_num + validate_num)]
