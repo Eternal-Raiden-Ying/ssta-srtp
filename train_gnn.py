@@ -8,8 +8,8 @@ import time
 import argparse
 import os
 from sklearn.metrics import r2_score
+from pathlib import Path
 
-from data_graph import labels, dgl_graphs_path
 from model import TimingGCN
 from Mydataset import DGLGraphDataset, get_dataloder
 from timm.scheduler import create_scheduler
@@ -73,9 +73,9 @@ parser.add_argument('--lr-noise-std', type=float, default=1.0, metavar='STDDEV',
                     help='learning rate noise std-dev (default: 1.0)')
 parser.add_argument('--warmup-lr', type=float, default=1e-3, metavar='LR',
                     help='warmup learning rate (default: 1e-6)')
-parser.add_argument('--min-lr', type=float, default=1e-7, metavar='LR',
+parser.add_argument('--min-lr', type=float, default=1e-8, metavar='LR',
                     help='lower lr bound for cyclic schedulers that hit 0 (1e-5)')
-parser.add_argument('--max-lr', type=float, default=1e-2, metavar='LR')
+parser.add_argument('--max-lr', type=float, default=1e-3, metavar='LR')
 parser.add_argument('--threshold',type=float,default=0.05)
 parser.add_argument('--increase-factor',type=float,default=1.2)
 
@@ -93,112 +93,22 @@ parser.add_argument('--plateau_mode',type=str,default='min',help='plateau-mode (
 parser.add_argument('--beta1',type=float,default=0.9)
 parser.add_argument('--beta2',type=float,default=0.999)
 
+def collect_graph_bins(root_dir):
+    """
+    递归遍历 root_dir 下所有 *.graph.bin 文件：
+    - dgl_graphs_path: 这些文件的绝对路径（list[str]）
+    - labels: 去掉 .graph.bin 后的文件名（list[str]）
+    """
+    root = Path(root_dir).expanduser().resolve()
+    dgl_graphs_path = []
+    labels = []
 
-# def test(model):    # at
-#     model.eval()
-#     with torch.no_grad():
-#         def test_dict(data):
-#             for k, (g, ts) in data.items():
-#                 torch.cuda.synchronize()
-#                 time_s = time.time()
-#                 pred = model(g, ts, groundtruth=False)[2][:, :4]
-#                 torch.cuda.synchronize()
-#                 time_t = time.time()
-#                 truth = g.ndata['n_atslew'][:, :4]
-#                 # notice: there is a typo in the parameter order of r2 calculator.
-#                 # please see https://github.com/TimingPredict/TimingPredict/issues/7.
-#                 # for exact reproducibility of experiments in paper, we will not directly fix the typo here.
-#                 # the experimental conclusions are not affected.
-#                 # r2 = r2_score(pred.cpu().numpy().reshape(-1),
-#                 #               truth.cpu().numpy().reshape(-1))
-#                 r2 = r2_score(truth.cpu().numpy().reshape(-1),
-#                               pred.cpu().numpy().reshape(-1))
-#                 print('{:15} r2 {:1.5f}, time {:2.5f}'.format(k, r2, time_t - time_s))
-#
-#                 # print('{}'.format(time_t - time_s + ts['topo_time']))
-#
-#         print('======= Training dataset ======')
-#         test_dict(data_train)
-#         print('======= Test dataset ======')
-#         test_dict(data_test)
-#
-#
-# def test_netdelay(model):    # net delay
-#     model.eval()
-#     with torch.no_grad():
-#         def test_dict(data):
-#             for k, (g, ts) in data.items():
-#                 pred = model(g, ts, groundtruth=False)[0]
-#                 truth = g.ndata['n_net_delays_log']
-#                 # notice: there is a typo in the parameter order of r2 calculator.
-#                 # please see https://github.com/TimingPredict/TimingPredict/issues/7.
-#                 # for exact reproducibility of experiments in paper, we will not directly fix the typo here.
-#                 # the experimental conclusions are not affected.
-#                 r2 = r2_score(pred.cpu().numpy().reshape(-1),
-#                               truth.cpu().numpy().reshape(-1))
-#                 print('{:15} {}'.format(k, r2))
-#
-#         print('======= Training dataset ======')
-#         test_dict(data_train)
-#         print('======= Test dataset ======')
-#         test_dict(data_test)
+    # 使用 rglob 递归匹配；sorted 保证稳定顺序
+    for p in sorted(root.rglob("*.graph.bin")):
+        dgl_graphs_path.append(str(p.resolve()))
+        labels.append(p.name[:-len(".graph.bin")])  # 对应 * 的部分
 
-
-# def train(model, dataloader, optimizer, epoch, lr_scheduler, groundtruth, args):
-#     model.train()
-#     train_loss_tot_net_delays, train_loss_tot_cell_delays, train_loss_tot_ats = 0, 0, 0
-#     train_loss_tot_cell_delays_prop, train_loss_tot_ats_prop = 0, 0
-#
-#     for (g,ts), label in dataloader:
-#         optimizer.zero_grad()
-#         # logging.info(f'training: (data):{label[0]} (size):num_nodes({g.num_nodes()}) num_edges({g.num_edges()})')
-#         pred_net_delays, pred_cell_delays, pred_atslew = model(g, ts, groundtruth=groundtruth)
-#         loss_net_delays, loss_cell_delays = 0, 0
-#
-#         if args.netdelay:
-#             loss_net_delays = F.mse_loss(pred_net_delays, g.ndata['n_net_delays_log'])
-#             train_loss_tot_net_delays += loss_net_delays.item()
-#
-#         if args.celldelay:
-#             loss_cell_delays = F.mse_loss(pred_cell_delays, g.edges['cell_out'].data['e_cell_delays'])
-#             train_loss_tot_cell_delays += loss_cell_delays.item()
-#         else:
-#             # Workaround for a dgl bug...
-#             # It seems that if some forward propagation channel is not used in backward graph, the GPU memory would BOOM.
-#             # so we just create a fake gradient channel for this cell delay fork and make sure it does not contribute to gradient by *0.
-#             loss_cell_delays = torch.sum(pred_cell_delays) * 0.0
-#         # TODO: compound loss with both groundTruth and propagate, with adaptive coefficient
-#         loss_ats = F.mse_loss(pred_atslew, g.ndata['n_atslew'])
-#         train_loss_tot_ats += loss_ats.item()
-#         (loss_net_delays + loss_cell_delays + loss_ats).backward()
-#         # loss_net_delays.backward()
-#         # loss_cell_delays.backward()
-#         # loss_ats.backward()
-#         optimizer.step()
-#     # lr = lr_scheduler.get_last_lr()
-#     # print(f"epoch:{epoch}: lr:{lr}, groundtruth:{groundtruth}")
-#     # TODO: not sure if only loss ats will be reasonable, compound loss occurs grammar mistake
-#     # lr_scheduler.step(epoch)
-#     if groundtruth:
-#         lr_scheduler.step(epoch, (train_loss_tot_net_delays+train_loss_tot_cell_delays+train_loss_tot_ats))
-#     else:
-#         lr_scheduler.step(epoch, train_loss_tot_ats)
-#
-#     if epoch % args.frequency == 0:
-#         with open(os.path.join(args.output_dir,args.checkpoint,'train_loss.txt'),'a') as file:
-#             file.write(f'{epoch},'
-#                        f'{train_loss_tot_net_delays / args.train_graph_num:.15f},'
-#                        f'{train_loss_tot_cell_delays / args.train_graph_num:.15f},'
-#                        f'{train_loss_tot_ats / args.train_graph_num:.15f}\n')
-#
-#     if epoch % args.frequency == 0:
-#         logging.info(f'Epoch {epoch}, training losses: '
-#                      f'net delay {train_loss_tot_net_delays / args.train_graph_num:.6f}, '
-#                      f'cell delay {train_loss_tot_cell_delays / args.train_graph_num:.6f},'
-#                      f' at {train_loss_tot_ats / args.train_graph_num:.6f}')
-#     return (train_loss_tot_net_delays / args.train_graph_num,
-#             train_loss_tot_cell_delays / args.train_graph_num,
-#             train_loss_tot_ats / args.train_graph_num)
+    return dgl_graphs_path, labels
 
 def train(model, dataloader, optimizers, epoch, lr_schedulers, groundtruth, args):
     model.train()
@@ -436,13 +346,11 @@ if __name__ == '__main__':
         print(f"training model TimingGCN on device {args.device}")
         print('saving logs and models to ./checkpoints/{}'.format(args.checkpoint))
 
-        train_graph_num = 12
-        validate_graph_num = 5
-        args.train_graph_num = train_graph_num
-        args.validate_graph_num = validate_graph_num
+        args.train_graph_num = getattr(args, 'train_graph_num', 12)
+        args.validate_graph_num = getattr(args, 'train_graph_num', 5)
 
         dataloader_train, dataloader_validate = get_dataloder(dgl_graphs_path, labels,
-                                                              train_graph_num, validate_graph_num, args)
+                                                              args.train_graph_num, args.validate_graph_num, args)
         # optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
         # lr_scheduler, _ = create_scheduler(args,optimizer)
         net_optimizer = torch.optim.Adam([{'params':model.nc1.parameters(),'lr':args.lr,'betas':(args.beta1,args.beta2)},

@@ -405,8 +405,8 @@ class TimingGCN(torch.nn.Module):
         self.nc1 = NetConv(10, 2, 32, net_dropout)
         self.nc2 = NetConv(32, 2, 32, net_dropout)
         self.nc3 = NetConv(32, 2, 16, net_dropout)  # 16 = 4x delay + 12x arbitrary (might include cap, beta)
-        # self.prop = SignalProp(10 + 16, 8, 7, 8, 4)
-        self.prop = SignalPropAttn(10 + 16, 8, 7, 8, 4,dropout=cell_dropout)
+        self.prop = SignalProp(10 + 16, 8, 7, 8, 4)
+        # self.prop = SignalPropAttn(10 + 16, 8, 7, 8, 4,dropout=cell_dropout)
 
 
     def forward(self, g, ts, groundtruth=0.0):
@@ -417,10 +417,10 @@ class TimingGCN(torch.nn.Module):
         x = self.nc3(g, ts, x)  # x.shape: nodes, nc3.out_nf(16)
         net_delays = x[:, :4]  # expect the front four element contains info relative to net_delays
         nf1 = torch.cat([nf0, x], dim=1)
-        # atslew, cell_delays, node_topo_layer, cell_topo_layer = self.prop(g, ts, nf1, groundtruth=groundtruth)
-        # return net_delays, cell_delays, atslew, node_topo_layer, cell_topo_layer
-        atslew, cell_delays = self.prop(g, ts, nf1, groundtruth=groundtruth)
-        return net_delays, cell_delays, atslew
+        atslew, cell_delays, node_topo_layer, cell_topo_layer = self.prop(g, ts, nf1, groundtruth=groundtruth)
+        return net_delays, cell_delays, atslew, node_topo_layer, cell_topo_layer
+        # atslew, cell_delays = self.prop(g, ts, nf1, groundtruth=groundtruth)
+        # return net_delays, cell_delays, atslew
 
 
 
