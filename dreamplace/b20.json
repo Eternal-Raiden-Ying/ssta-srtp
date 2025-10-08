@@ -1,0 +1,12 @@
+{
+  "lef_input": [
+    "/root/autodl-tmp/test/dreamplace/sky130hs/lef/sky130_fd_sc_hs.tlef",
+    "/root/autodl-tmp/test/dreamplace/sky130hs/lef/sky130_fd_sc_hs_merged.lef"
+  ],
+  "def_input": "/root/autodl-tmp/test/dreamplace/sky130hs/def/6_final.def",
+  "result_dir":"/root/autodl-tmp/test/dreamplace/sky130hs/res",
+  "gpu": 1,
+  "global_place_flag": 1,
+  "legalize_flag": 1,
+  "detailed_place_flag": 1
+}

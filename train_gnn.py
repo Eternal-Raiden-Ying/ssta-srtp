@@ -19,7 +19,7 @@ from utils import *
 
 parser = argparse.ArgumentParser(description='TimingPredict-GNN')
 parser.add_argument(
-    '--test', type=bool,default=False,
+    '--test', type=bool,default=True,
     help='If specified, executing original code, using to back up that paper')
 parser.add_argument(
     '--checkpoint', type=str,default="model_v11_gradient_clip_norm_data",
@@ -362,6 +362,7 @@ def test(model, dataloader, optimizer, args):
         sample_r2 = list()
 
         for (g, ts), label in dataloader:
+            print(label, f"LUT all valid {g.edges['cell_out'].data['ef'][:,:120].reshape(-1,8,15)[:,:,0].any()}")
             pred_net_delays, pred_cell_delays, pred_atslew, _, _ = model(g, ts, groundtruth=True)
             pred_net_delays_prop, pred_cell_delays_prop, pred_atslew_prop, _, _ = model(g, ts, groundtruth=False)
             r2 = [0,0,0,0,0,0]

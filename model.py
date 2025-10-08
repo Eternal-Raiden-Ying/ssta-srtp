@@ -1,22 +1,7 @@
 import torch
-import torch.nn.functional as F
 import dgl
 import dgl.function as fn
 import functools
-from torch.autograd import Function
-
-# class SeparateLossCustom(Function):
-#     @staticmethod
-#     def forward(ctx, input, target):
-#         ctx.save_for_backward(input, target)
-#         return F.mse_loss(input, target, reduction='none')  # 返回逐元素的 MSE Loss
-#
-#     @staticmethod
-#     def backward(ctx, grad_output):
-#         input, target = ctx.saved_tensors
-#         grad_input = grad_output * 2 * (input - target)  # 自定义的梯度计算
-#         grad_target = -grad_input  # 对目标的梯度是负的
-#         return grad_input, grad_target
 
 
 class MLP(torch.nn.Module):
@@ -128,180 +113,6 @@ class NetConv(torch.nn.Module):
 
             return g.ndata['new_nf']
 
-
-# class SignalProp(torch.nn.Module):
-#     def __init__(self, in_nf, in_cell_num_luts, in_cell_lut_sz, out_nf, out_cef, h1=32, h2=32, lut_dup=4):
-#         super().__init__()
-#         self.in_nf = in_nf  # 10+16
-#         self.in_cell_num_luts = in_cell_num_luts  # 8
-#         self.in_cell_lut_sz = in_cell_lut_sz  # 7
-#         self.out_nf = out_nf  # 8
-#         self.out_cef = out_cef  # 4
-#         self.h1 = h1
-#         self.h2 = h2
-#         self.lut_dup = lut_dup  # ??
-#
-#         self.MLP_netprop = MLP(self.out_nf + 2 * self.in_nf, 64, 64, 64, 64, self.out_nf)
-#
-#         self.MLP_lut_query = MLP(self.out_nf + 2 * self.in_nf, 64, 64, 64, self.in_cell_num_luts * lut_dup * 2)
-#         self.MLP_lut_attention = MLP(1 + 2 + self.in_cell_lut_sz * 2, 64, 64, 64, self.in_cell_lut_sz * 2)
-#         self.MLP_cellarc_msg = MLP(self.out_nf + 2 * self.in_nf + self.in_cell_num_luts * self.lut_dup, 64, 64, 64, 1 + self.h1 + self.h2 + self.out_cef)
-#         self.MLP_cellreduce = MLP(self.in_nf + self.h1 + self.h2, 64, 64, 64, self.out_nf)
-#
-#     def edge_msg_net(self, edges, groundtruth=False):
-#         # edges type: net_out, fanout node -> fanin node
-#         if groundtruth:
-#             # for training
-#             last_nf = edges.src['n_atslew']  # AT and slew of fanout node of last cell
-#         else:
-#             # for validating
-#             last_nf = edges.src['new_nf']
-#         # node feature contains 10 origin nf and 16 new_nf (excepted to get delay(RF/EL) and beta etc.)
-#         x = torch.cat([last_nf, edges.src['nf'], edges.dst['nf']], dim=1)
-#
-#         # out dim = 8, excepted to get new AT and slew (single path, impossible to use max operation, fanout -> fanin)
-#         x = self.MLP_netprop(x)
-#         return {'efn': x}
-#
-#     def edge_msg_cell(self, edges, groundtruth=False):
-#         # edges: (one cell) fanin -- cell_out -- fanout
-#
-#         # generate lut axis query
-#         if groundtruth:
-#             last_nf = edges.src['n_atslew']  # input transition(slew) and AT
-#         else:
-#             last_nf = edges.src['new_nf']
-#
-#         # last_nf contains input transition and fanout node features contains output capacitance
-#         # thus could make lut axis query
-#         q = torch.cat([last_nf, edges.src['nf'], edges.dst['nf']], dim=1)
-#         q = self.MLP_lut_query(q)  # get query vector (slew, cap) * num_lut * lut_dup
-#         q = q.reshape(-1, 2)  # shape: (nodes)*num_lut*lut_dup, 2(slew, cap)
-#
-#         # answer lut axis query
-#         axis_len = self.in_cell_num_luts * (1 + 2 * self.in_cell_lut_sz)
-#         axis = edges.data['ef'][:, :axis_len]
-#         axis = axis.reshape(-1, 1 + 2 * self.in_cell_lut_sz)  # shape: num_lut, query len
-#         axis = axis.repeat(1, self.lut_dup).reshape(-1, 1 + 2 * self.in_cell_lut_sz)  # shape: num_lut*lut*dup,query len
-#         a = self.MLP_lut_attention(torch.cat([q, axis], dim=1))  # shape: 2 * lut_sz  (x attn, y attn)
-#
-#         # transform answer to answer mask matrix
-#         a = a.reshape(-1, 2, self.in_cell_lut_sz)
-#         ax, ay = torch.split(a, [1, 1], dim=1)
-#         a = torch.matmul(ax.reshape(-1, self.in_cell_lut_sz, 1), ay.reshape(-1, 1, self.in_cell_lut_sz))  # batch tensor product
-#
-#         # look up answer matrix in lut
-#         tables_len = self.in_cell_num_luts * self.in_cell_lut_sz ** 2
-#         tables = edges.data['ef'][:, axis_len:axis_len + tables_len]  # shape: nodes*table*num_lut
-#         # TODO: dot product could be replaced by attention mechanism
-#         r = torch.matmul(tables.reshape(-1, 1, 1, self.in_cell_lut_sz ** 2),  # shape:nodes * num_lut,1,1,table
-#                          a.reshape(-1, 4, self.in_cell_lut_sz ** 2, 1)  # shape: nodes*num_lut,lut_dup,table,1
-#                          )   # batch dot product
-#
-#         # construct final msg
-#         r = r.reshape(len(edges), self.in_cell_num_luts * self.lut_dup)
-#         x = torch.cat([last_nf, edges.src['nf'], edges.dst['nf'], r], dim=1)
-#         x = self.MLP_cellarc_msg(x)
-#         k, f1, f2, cef = torch.split(x, [1, self.h1, self.h2, self.out_cef], dim=1)
-#         k = torch.sigmoid(k)
-#         return {'efc1': f1 * k, 'efc2': f2 * k, 'efce': cef}
-#
-#     def node_reduce_o(self, nodes):
-#         x = torch.cat([nodes.data['nf'], nodes.data['nfc1'], nodes.data['nfc2']], dim=1)
-#         x = self.MLP_cellreduce(x)
-#         return {'new_nf': x}
-#
-#     def node_skip_level_o(self, nodes):
-#         return {'new_nf': nodes.data['n_atslew']}
-#
-#     def forward(self, g, ts, nf, groundtruth=False):
-#         """
-#         @param: g:           graph
-#         @param: ts:          tensors
-#         @param: nf:          node features after MLP, shape: nodes, nf+new_nf (10+16)
-#         @param: groundtruth: bool using true data for training
-#         """
-#         assert len(ts['topo']) % 2 == 0, 'The number of logic levels must be even (net, cell, net)'
-#
-#         with g.local_scope():
-#             # init level 0 with ground truth features
-#             g.ndata['nf'] = nf  # node features replaced by [node_features, new_nf(from embedding)]
-#             g.ndata['new_nf'] = torch.zeros(g.num_nodes(), self.out_nf, device='cuda', dtype=nf.dtype)
-#
-#             # input transition of pi_nodes is known here,
-#             # meaning input transition is given in SDC?
-#             g.apply_nodes(self.node_skip_level_o, ts['pi_nodes'])
-#
-#             def prop_net(nodes, groundtruth):
-#                 # nodes: target node (usually need fanin node)
-#                 # from target nodes, for their in-edge, generate mess on specified edge(by etype)
-#                 # and pull them to target nodes, then aggregate them
-#
-#                 # function:
-#                 g.pull(nodes, functools.partial(self.edge_msg_net, groundtruth=groundtruth), fn.sum('efn', 'new_nf'), etype='net_out')
-#                 return F.mse_loss(nodes.data['new_nf'], nodes.data['n_atslew'])
-#
-#             def prop_cell(nodes, groundtruth):
-#                 # nodes: fanout (except I pin nodes)
-#                 es = g.in_edges(nodes, etype='cell_out')  # returning in-edge of 'cell_out' etype
-#                 # fanout nodes have two type of in-edge:
-#                 #   fanin node -- cell_out -- fanout node (in one cell)
-#                 #   fanin node -- net_in --fanout node (not in one cell)
-#
-#                 g.apply_edges(functools.partial(self.edge_msg_cell, groundtruth=groundtruth), es, etype='cell_out')
-#                 # maybe use g.pull(etype='cell_out')
-#
-#                 g.send_and_recv(es, fn.copy_e('efc1', 'efc1'), fn.sum('efc1', 'nfc1'), etype='cell_out')
-#                 g.send_and_recv(es, fn.copy_e('efc2', 'efc2'), fn.max('efc2', 'nfc2'), etype='cell_out')
-#                 g.apply_nodes(self.node_reduce_o, nodes)
-#                 return F.mse_loss(nodes.data['new_nf'],nodes.data['n_atslew']), F.mse_loss(es.data['efce'],es.data['e_cell_delays'])
-#
-#             # if groundtruth:
-#             #     # don't need to propagate.
-#             #     # author says groundtruth is used for training (*****)
-#             #     # source: https://github.com/TimingPredict/TimingPredict/issues/11
-#             #     # prop_net(ts['input_nodes'], groundtruth)  # input nodes stand for fanin nodes
-#             #     # prop_cell(ts['output_nodes_nonpi'], groundtruth)  # for output nodes except I pin node
-#             #     for i in range(1, len(ts['topo'])):
-#             #         # i == 0 means I pin node
-#             #         if i % 2 == 1:
-#             #             # i is an odd -> topo[i] is fanin nodes
-#             #             prop_net(ts['topo'][i], groundtruth)
-#             #         else:
-#             #             # i is an even -> topo[i] is fanout nodes
-#             #             prop_cell(ts['topo'][i], groundtruth)
-#             #
-#             # else:
-#             #     # propagate
-#             #     for i in range(1, len(ts['topo'])):
-#             #         # i == 0 means I pin node
-#             #         if i % 2 == 1:
-#             #             # i is an odd -> topo[i] is fanin nodes
-#             #             prop_net(ts['topo'][i], groundtruth)
-#             #         else:
-#             #             # i is an even -> topo[i] is fanout nodes
-#             #             prop_cell(ts['topo'][i], groundtruth)
-#
-#             # don't need to propagate.
-#             # author says groundtruth is used for training (*****)
-#             # source: https://github.com/TimingPredict/TimingPredict/issues/11
-#             # prop_net(ts['input_nodes'], groundtruth)  # input nodes stand for fanin nodes
-#             # prop_cell(ts['output_nodes_nonpi'], groundtruth)  # for output nodes except I pin node
-#             cell_loss = 0.0
-#             at_loss = 0.0
-#             for i in range(1, len(ts['topo'])):
-#                 # i == 0 means I pin node
-#                 if i % 2 == 1:
-#                     # i is an odd -> topo[i] is fanin nodes
-#                     layer_at_loss = prop_net(ts['topo'][i], groundtruth)
-#                     at_loss += layer_at_loss/float(i)
-#                 else:
-#                     # i is an even -> topo[i] is fanout nodes
-#                     layer_at_loss, layer_cell_loss = prop_cell(ts['topo'][i], groundtruth)
-#                     at_loss += layer_at_loss/float(i)
-#                     cell_loss += layer_cell_loss/float(i)
-#
-#             return g.ndata['new_nf'], g.edges['cell_out'].data['efce'],at_loss,cell_loss
 
 class SignalProp(torch.nn.Module):
     def __init__(self, in_nf, in_cell_num_luts, in_cell_lut_sz, out_nf, out_cef, h1=32, h2=32, lut_dup=4):
@@ -588,187 +399,16 @@ class SignalPropAttn(torch.nn.Module):
             return g.ndata['new_nf'], g.edges['cell_out'].data['efce']
 
 
-class SignalProp_New(torch.nn.Module):
-    """
-    dynamic groundtruth
-    output topo layer
-
-    """
-    def __init__(self, in_nf, in_cell_num_luts, in_cell_lut_sz, out_nf, out_cef, h1=32, h2=32, lut_dup=4):
-        super().__init__()
-        self.in_nf = in_nf  # 10+16
-        self.in_cell_num_luts = in_cell_num_luts  # 8
-        self.in_cell_lut_sz = in_cell_lut_sz  # 7
-        self.out_nf = out_nf  # 8
-        self.out_cef = out_cef  # 4
-        self.h1 = h1
-        self.h2 = h2
-        self.lut_dup = lut_dup  # duplicate for RF/EL
-
-        self.MLP_netprop = MLP(self.out_nf + 2 * self.in_nf, 64, 64, 64, 64, self.out_nf)
-
-        self.MLP_lut_query = MLP(self.out_nf + 2 * self.in_nf, 64, 64, 64, self.in_cell_num_luts * lut_dup * 2)
-        self.MLP_lut_attention = MLP(1 + 2 + self.in_cell_lut_sz * 2, 64, 64, 64, self.in_cell_lut_sz * 2)
-        self.MLP_cellarc_msg = MLP(self.out_nf + 2 * self.in_nf + self.in_cell_num_luts * self.lut_dup, 64, 64, 64,
-                                   1 + self.h1 + self.h2 + self.out_cef)
-        self.MLP_cellreduce = MLP(self.in_nf + self.h1 + self.h2, 64, 64, 64, self.out_nf)
-
-    def edge_msg_net(self, edges, groundtruth=0.0):
-        # edges type: net_out, fanout node -> fanin node
-        if groundtruth == 1.0:
-            # for training
-            last_nf = edges.src['n_atslew']  # AT and slew of fanout node of last cell
-        else:
-            # for validating
-            last_nf = edges.src['n_atslew'].mul(groundtruth)+edges.src['new_nf'].mul(1-groundtruth)
-        # node feature contains 10 origin nf and 16 new_nf (excepted to get delay(RF/EL) and beta etc.)
-        x = torch.cat([last_nf, edges.src['nf'], edges.dst['nf']], dim=1)
-
-        # out dim = 8, excepted to get new AT and slew (single path, impossible to use max operation, fanout -> fanin)
-        x = self.MLP_netprop(x)
-        return {'efn': x}
-
-    def edge_msg_cell(self, edges, groundtruth=0.0):
-        # edges: (one cell) fanin -- cell_out -- fanout
-
-        # generate lut axis query
-        if groundtruth==1.0:
-            last_nf = edges.src['n_atslew']  # input transition(slew) and AT
-        else:
-            last_nf = edges.src['n_atslew'].mul(groundtruth)+edges.src['new_nf'].mul(1-groundtruth)
-
-        # last_nf contains input transition and fanout node features contains output capacitance
-        # thus could make lut axis query
-        q = torch.cat([last_nf, edges.src['nf'], edges.dst['nf']], dim=1)
-        q = self.MLP_lut_query(q)  # get query vector (slew, cap) * num_lut * lut_dup
-        q = q.reshape(-1, 2)  # shape: (nodes)*num_lut*lut_dup, 2(slew, cap)
-
-        # answer lut axis query
-        axis_len = self.in_cell_num_luts * (1 + 2 * self.in_cell_lut_sz)
-        axis = edges.data['ef'][:, :axis_len]
-        axis = axis.reshape(-1, 1 + 2 * self.in_cell_lut_sz)  # shape: num_lut, query len
-        axis = axis.repeat(1, self.lut_dup).reshape(-1, 1 + 2 * self.in_cell_lut_sz)  # shape: num_lut*lut*dup,query len
-        a = self.MLP_lut_attention(torch.cat([q, axis], dim=1))  # shape: 2 * lut_sz  (x attn, y attn)
-
-        # transform answer to answer mask matrix
-        a = a.reshape(-1, 2, self.in_cell_lut_sz)
-        ax, ay = torch.split(a, [1, 1], dim=1)
-        a = torch.matmul(ax.reshape(-1, self.in_cell_lut_sz, 1),
-                         ay.reshape(-1, 1, self.in_cell_lut_sz))  # batch tensor product
-
-        # look up answer matrix in lut
-        tables_len = self.in_cell_num_luts * self.in_cell_lut_sz ** 2
-        tables = edges.data['ef'][:, axis_len:axis_len + tables_len]  # shape: nodes*table*num_lut
-        r = torch.matmul(tables.reshape(-1, 1, 1, self.in_cell_lut_sz ** 2),  # shape:nodes * num_lut,1,1,table
-                         a.reshape(-1, 4, self.in_cell_lut_sz ** 2, 1)  # shape: nodes*num_lut,lut_dup,table,1
-                         )  # batch dot product
-
-        # construct final msg
-        r = r.reshape(len(edges), self.in_cell_num_luts * self.lut_dup)
-        x = torch.cat([last_nf, edges.src['nf'], edges.dst['nf'], r], dim=1)
-        x = self.MLP_cellarc_msg(x)
-        k, f1, f2, cef = torch.split(x, [1, self.h1, self.h2, self.out_cef], dim=1)
-        k = torch.sigmoid(k)
-        return {'efc1': f1 * k, 'efc2': f2 * k, 'efce': cef}
-
-    def node_reduce_o(self, nodes):
-        x = torch.cat([nodes.data['nf'], nodes.data['nfc1'], nodes.data['nfc2']], dim=1)
-        x = self.MLP_cellreduce(x)
-        return {'new_nf': x}
-
-    def node_skip_level_o(self, nodes):
-        return {'new_nf': nodes.data['n_atslew']}
-
-    def set_topo_layer_n(self,nodes, layer):
-        return {'topo_layer':layer * torch.ones(len(nodes),1,device='cuda',dtype=torch.float32,requires_grad=False)}
-
-    def set_topo_layer_e(self, edges, layer):
-        return {'topo_layer': layer * torch.ones(len(edges), 1, device='cuda', dtype=torch.float32, requires_grad=False)}
-    def forward(self, g, ts, nf, groundtruth=0.0):
-        """
-        @param: g:           graph
-        @param: ts:          tensors
-        @param: nf:          node features after MLP, shape: nodes, nf+new_nf (10+16)
-        @param: groundtruth: bool using true data for training
-        """
-        assert len(ts['topo']) % 2 == 0, 'The number of logic levels must be even (net, cell, net)'
-
-        with g.local_scope():
-            # init level 0 with ground truth features
-            g.ndata['nf'] = nf  # node features replaced by [node_features, new_nf(from embedding)]
-            g.ndata['new_nf'] = torch.zeros(g.num_nodes(), self.out_nf, device='cuda', dtype=nf.dtype)
-            g.ndata['topo_layer'] = torch.ones(g.num_nodes(),1,device='cuda',dtype=torch.float32,requires_grad=False)
-
-            # input transition of pi_nodes is known here,
-            # meaning input transition is given in SDC?
-            g.apply_nodes(self.node_skip_level_o, ts['pi_nodes'])
-
-            def prop_net(nodes, groundtruth, topo_layer):
-                # nodes: target node (usually need fanin node)
-                # from target nodes, for their in-edge, generate mess on specified edge(by etype)
-                # and pull them to target nodes, then aggregate them
-
-                # function:
-                g.pull(nodes, functools.partial(self.edge_msg_net, groundtruth=groundtruth), fn.sum('efn', 'new_nf'),
-                       etype='net_out')
-                g.apply_nodes(functools.partial(self.set_topo_layer_n, layer=topo_layer),nodes)
-
-
-            def prop_cell(nodes, groundtruth, topo_layer):
-                # nodes: fanout (except I pin nodes)
-                es = g.in_edges(nodes, etype='cell_out')  # returning in-edge of 'cell_out' etype
-                # fanout nodes have two type of in-edge:
-                #   fanin node -- cell_out -- fanout node (in one cell)
-                #   fanin node -- net_in --fanout node (not in one cell)
-
-                g.apply_edges(functools.partial(self.edge_msg_cell, groundtruth=groundtruth), es, etype='cell_out')
-                g.apply_edges(functools.partial(self.set_topo_layer_e,layer=topo_layer),es,etype='cell_out')
-                # maybe use g.pull(etype='cell_out')
-
-                g.send_and_recv(es, fn.copy_e('efc1', 'efc1'), fn.sum('efc1', 'nfc1'), etype='cell_out')
-                g.send_and_recv(es, fn.copy_e('efc2', 'efc2'), fn.max('efc2', 'nfc2'), etype='cell_out')
-                g.apply_nodes(self.node_reduce_o, nodes)
-                g.apply_nodes(functools.partial(self.set_topo_layer_n,layer=topo_layer),nodes)
-
-            for i in range(1, len(ts['topo'])):
-                # i == 0 means I pin node
-                if i % 2 == 1:
-                    # i is an odd -> topo[i] is fanin nodes
-                    prop_net(ts['topo'][i], groundtruth,i+1)
-                else:
-                    # i is an even -> topo[i] is fanout nodes
-                    prop_cell(ts['topo'][i], groundtruth,i+1)
-
-            return g.ndata['new_nf'], g.edges['cell_out'].data['efce'], g.ndata['topo_layer'], g.edges['cell_out'].data['topo_layer']
-
 class TimingGCN(torch.nn.Module):
     def __init__(self, net_dropout=0.0, cell_dropout=0.0):
         super().__init__()
         self.nc1 = NetConv(10, 2, 32, net_dropout)
         self.nc2 = NetConv(32, 2, 32, net_dropout)
         self.nc3 = NetConv(32, 2, 16, net_dropout)  # 16 = 4x delay + 12x arbitrary (might include cap, beta)
-        # self.prop = SignalPropAttn(10 + 16, 8, 7, 8, 4,dropout=cell_dropout)
-        self.prop = SignalProp(10 + 16, 8, 7, 8, 4)
+        # self.prop = SignalProp(10 + 16, 8, 7, 8, 4)
+        self.prop = SignalPropAttn(10 + 16, 8, 7, 8, 4,dropout=cell_dropout)
 
-    # def forward(self, g, ts, groundtruth=0.0):
-    #     nf0 = g.ndata['nf']  # node features  shape: nodes, 10
-    #     x = self.nc1(g, ts, nf0)
-    #     x = self.nc2(g, ts, x)
-    #     x = self.nc3(g, ts, x)  # x.shape: nodes, nc3.out_nf(16)
-    #     if groundtruth == 1.0:
-    #         # for training
-    #         net_delays = x[:, :4]  # expect the front four element contains info relative to net_delays
-    #         other_dim = x[:, 4:]
-    #         nf1 = torch.cat([nf0, g.ndata['n_net_delays_log'], other_dim], dim=1)
-    #         atslew, cell_delays = self.prop(g, ts, nf1, groundtruth=groundtruth)
-    #     else:
-    #         net_delays = x[:, :4]
-    #         other_dim = x[:, 4:]
-    #         nf1 = torch.cat([nf0, net_delays.detach(), other_dim], dim=1)
-    #         atslew, cell_delays = self.prop(g, ts, nf1, groundtruth=groundtruth)
-    #     return net_delays, cell_delays, atslew
 
-    # RAW version
     def forward(self, g, ts, groundtruth=0.0):
         # why here g has delay info of nodes already
         nf0 = g.ndata['nf']  # node features  shape: nodes, 10
@@ -777,19 +417,12 @@ class TimingGCN(torch.nn.Module):
         x = self.nc3(g, ts, x)  # x.shape: nodes, nc3.out_nf(16)
         net_delays = x[:, :4]  # expect the front four element contains info relative to net_delays
         nf1 = torch.cat([nf0, x], dim=1)
-        atslew, cell_delays, node_topo_layer, cell_topo_layer = self.prop(g, ts, nf1, groundtruth=groundtruth)
-        return net_delays, cell_delays, atslew, node_topo_layer, cell_topo_layer
+        # atslew, cell_delays, node_topo_layer, cell_topo_layer = self.prop(g, ts, nf1, groundtruth=groundtruth)
+        # return net_delays, cell_delays, atslew, node_topo_layer, cell_topo_layer
+        atslew, cell_delays = self.prop(g, ts, nf1, groundtruth=groundtruth)
+        return net_delays, cell_delays, atslew
 
-    # def forward(self, g, ts, groundtruth=0.0):
-    #     # why here g has delay info of nodes already
-    #     nf0 = g.ndata['nf']  # node features  shape: nodes, 10
-    #     x = self.nc1(g, ts, nf0)
-    #     x = self.nc2(g, ts, x)
-    #     x = self.nc3(g, ts, x)  # x.shape: nodes, nc3.out_nf(16)
-    #     net_delays = x[:, :4]  # expect the front four element contains info relative to net_delays
-    #     nf1 = torch.cat([nf0, x], dim=1)
-    #     atslew, cell_delays, at_loss, cell_loss = self.prop(g, ts, nf1, groundtruth=groundtruth)
-    #     return net_delays, cell_delays, atslew, at_loss, cell_loss
+
 
 
 # {AllConv, DeepGCNII}: Simple and Deep Graph Convolutional Networks, arxiv 2007.02133 (GCNII)
