@@ -22,7 +22,7 @@ Building upon the original TimingPredict, our main improvements and additions ar
 
 To facilitate easy reproduction of our experimental results, we provide the required graph file for model inference of a circuit under the skywater130 ff process corner\. The graph file is stored in Baidu Netdisk, and the download link is provided below:
 
-**Baidu Netdisk Download Link**: \[Insert Your Baidu Netdisk Link Here\]
+**Baidu Netdisk Download Link**: \[https://pan.baidu.com/s/1H_g6xJT0lzaBOtmHzqs9wg?pwd=c3r1\]
 
 Note: This graph file is essential for running the model inference on the skywater130 ff circuit, ensuring consistency with our experimental setup\.
 
@@ -66,10 +66,8 @@ Note: The environment for building DGL from source is: Windows 11 \(x86\), Pytho
 
 # Original Repository
 
-This project is a fork of the original DAC \(TimingPredict\) repository\. For more details on the base code, please refer to the original repository: \[Insert Original TimingPredict Repository Link Here\]
+This project is a fork of the original DAC \(TimingPredict\) repository\. For more details on the base code, please refer to the original repository: \[https://github.com/TimingPredict/TimingPredict.git\]
 
 # Contact
 
-For any questions, issues, or suggestions regarding this project, please feel free to contact us via \[Insert Your Contact Information Here\]\.
-
-> （注：文档部分内容可能由 AI 生成）
+For any questions, issues, or suggestions regarding this project, please feel free to contact me via 3136992610@qq.com
