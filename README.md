@@ -42,7 +42,7 @@ Currently, the Deep Graph Library \(DGL\) used in this project lacks maintenance
 
 1. **Linux Environment**: DGL can be installed directly via pip following the official guide, which is the recommended approach for stability and simplicity\.
 
-2. **Windows Environment**: You can build DGL from source, though this process is relatively complex\. To simplify this, we provide our precompiled DGL package for Windows users who want to quickly complete testing\. Our precompiled package is compatible with the following environment:
+2. **Windows Environment**: You can build DGL from source, though this process is relatively complex\. To simplify this, we provide our precompiled DGL package for Windows users who want to quickly complete testing\. https://pan.baidu.com/s/1TnVfsguKjXGjRk_sa7CZTA?pwd=hx5p\. Our precompiled package is compatible with the following environment:
 
     - Python 3\.12
 
